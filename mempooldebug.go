@@ -31,7 +31,12 @@ type MemPool struct {
 
 	allocCnt    uint64
 	freeCnt     uint64
-	allocStacks map[uintptr]string
+	allocSize   uint64
+	reallocCnt  uint64
+	allocStacks map[uintptr]struct {
+		Cap   int
+		Stack string
+	}
 }
 
 // New .
@@ -47,12 +52,15 @@ func New(smallSize, bigSize int) Allocator {
 	}
 
 	mp := &MemPool{
-		smallSize:   smallSize,
-		bigSize:     bigSize,
-		allocStacks: map[uintptr]string{},
-		smallPool:   &sync.Pool{},
-		bigPool:     &sync.Pool{},
-		Debug:       true,
+		smallSize: smallSize,
+		bigSize:   bigSize,
+		allocStacks: map[uintptr]struct {
+			Cap   int
+			Stack string
+		}{},
+		smallPool: &sync.Pool{},
+		bigPool:   &sync.Pool{},
+		Debug:     true,
 	}
 	mp.smallPool.New = func() interface{} {
 		buf := make([]byte, smallSize)
@@ -86,7 +94,7 @@ func (mp *MemPool) Malloc(size int) []byte {
 		mp.mux.Lock()
 		defer mp.mux.Unlock()
 		ptr := getBufferPtr(*pbuf)
-		mp.addAllocStack(ptr)
+		mp.addAllocStack(ptr, cap(*pbuf))
 	}
 
 	return (*pbuf)[:size]
@@ -136,7 +144,7 @@ func (mp *MemPool) reallocDebug(buf []byte, size int) []byte {
 		ptr := getBufferPtr(*pbuf)
 		mp.mux.Lock()
 		defer mp.mux.Unlock()
-		mp.addAllocStack(ptr)
+		mp.addAllocStack(ptr, cap(*pbuf))
 		return *pbuf
 	}
 	oldPtr := getBufferPtr(buf)
@@ -149,7 +157,7 @@ func (mp *MemPool) reallocDebug(buf []byte, size int) []byte {
 		mp.mux.Lock()
 		defer mp.mux.Unlock()
 		mp.deleteAllocStack(oldPtr)
-		mp.addAllocStack(newPtr)
+		mp.addAllocStack(newPtr, cap(buf))
 	}
 
 	return (buf)[:size]
@@ -201,7 +209,7 @@ func (mp *MemPool) appendStringDebug(buf []byte, more string) []byte {
 		ptr := getBufferPtr(*pbuf)
 		mp.mux.Lock()
 		defer mp.mux.Unlock()
-		mp.addAllocStack(ptr)
+		mp.addAllocStack(ptr, cap(*pbuf))
 		return *pbuf
 	}
 
@@ -212,7 +220,7 @@ func (mp *MemPool) appendStringDebug(buf []byte, more string) []byte {
 		mp.mux.Lock()
 		defer mp.mux.Unlock()
 		mp.deleteAllocStack(oldPtr)
-		mp.addAllocStack(newPtr)
+		mp.addAllocStack(newPtr, cap(buf))
 	}
 	return buf
 }
@@ -235,9 +243,33 @@ func (mp *MemPool) Free(buf []byte) {
 	pool.Put(&buf)
 }
 
-func (mp *MemPool) addAllocStack(ptr uintptr) {
-	mp.allocCnt++
-	mp.allocStacks[ptr] = getStack()
+func (mp *MemPool) addAllocStack(ptr uintptr, size int) {
+	if info, ok := mp.allocStacks[ptr]; !ok {
+		mp.allocCnt++
+		mp.allocStacks[ptr] = struct {
+			Cap   int
+			Stack string
+		}{
+			Cap:   size,
+			Stack: getStack(),
+		}
+		mp.allocSize += uint64(size)
+	} else {
+		mp.allocStacks[ptr] = struct {
+			Cap   int
+			Stack string
+		}{
+			Cap:   size,
+			Stack: getStack(),
+		}
+		if size < info.Cap {
+			panic(fmt.Errorf("size < previous size: %v, %v", size, info.Cap))
+		}
+		if size > info.Cap {
+			mp.reallocCnt++
+			mp.allocSize += uint64(size - info.Cap)
+		}
+	}
 }
 
 func (mp *MemPool) deleteAllocStack(ptr uintptr) {
@@ -271,8 +303,11 @@ func (mp *MemPool) LogDebugInfo() {
 	// 	fmt.Println("---------------------------------------------------------")
 	// }
 	fmt.Println("Alloc Without Free:", mp.allocCnt-mp.freeCnt)
-	fmt.Println("TotalAlloc        :", mp.allocCnt)
-	fmt.Println("TotalFree         :", mp.freeCnt)
+	fmt.Println("TotalAllocSize    :", mp.allocSize)
+	fmt.Println("TotalAllocTimes   :", mp.allocCnt)
+	fmt.Println("TotalFreeTimes    :", mp.freeCnt)
+	fmt.Println("TotalReallocTimes :", mp.reallocCnt)
+
 	fmt.Println("---------------------------------------------------------")
 }
 
@@ -340,11 +375,13 @@ func LogDebugInfo() {
 }
 
 func init() {
-	ticker := time.NewTicker(time.Second * 5)
-	for {
-		<-ticker.C
-		LogDebugInfo()
-	}
+	go func() {
+		ticker := time.NewTicker(time.Second * 5)
+		for {
+			<-ticker.C
+			LogDebugInfo()
+		}
+	}()
 }
 
 func getBufferPtr(buf []byte) uintptr {
