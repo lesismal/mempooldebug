@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"time"
 	"unsafe"
 )
 
@@ -248,6 +249,9 @@ func (mp *MemPool) deleteAllocStack(ptr uintptr) {
 }
 
 func (mp *MemPool) LogDebugInfo() {
+	if !mp.Debug {
+		return
+	}
 	mp.mux.Lock()
 	defer mp.mux.Unlock()
 	fmt.Println("---------------------------------------------------------")
@@ -332,6 +336,14 @@ func LogDebugInfo() {
 	mp, ok := DefaultMemPool.(*MemPool)
 	if ok {
 		mp.LogDebugInfo()
+	}
+}
+
+func init() {
+	ticker := time.NewTicker(time.Second * 5)
+	for {
+		<-ticker.C
+		LogDebugInfo()
 	}
 }
 
