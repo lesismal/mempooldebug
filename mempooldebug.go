@@ -51,7 +51,7 @@ func New(smallSize, bigSize int) Allocator {
 		allocStacks: map[uintptr]string{},
 		smallPool:   &sync.Pool{},
 		bigPool:     &sync.Pool{},
-		// Debug:       true,
+		Debug:       true,
 	}
 	mp.smallPool.New = func() interface{} {
 		buf := make([]byte, smallSize)
