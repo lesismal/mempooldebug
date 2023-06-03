@@ -17,7 +17,7 @@ type Allocator interface {
 }
 
 // DefaultMemPool .
-var DefaultMemPool = New(64, 64)
+var DefaultMemPool = New(512, 1024*1024*64)
 
 // MemPool .
 type MemPool struct {
